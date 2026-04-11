@@ -7,6 +7,15 @@ const { CookieJar } = require('tough-cookie');
 const app = express();
 app.use(express.json());
 
+// 📅 Aaj ki date nikalne ka function (Format: YYYY-MM-DD)
+function getTodayDate() {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
 // 🛑 1. PANELS KI DETAILS
 const PANELS = [
     { 
@@ -21,7 +30,8 @@ const PANELS = [
         id: 2, 
         name: "Panel 85.195", 
         loginUrl: "http://85.195.94.50/sms/SignIn", 
-        statsUrl: "http://85.195.94.50/sms/reseller/SMSReports",  
+        // 👇 Yeh raha aapka Asli API Link (Maine Date aur Length=100 set kar di hai)
+        ajaxUrl: "http://85.195.94.50/sms/reseller/ajax/dt_reports.php?fdate1={TODAY}%2000:00:00&fdate2={TODAY}%2023:59:59&ftermination=&fclient=&fnum=&fcli=&fgdate=0&fgtermination=0&fgclient=0&fgnumber=0&fgcli=0&fg=0&sEcho=1&iColumns=11&sColumns=%2C%2C%2C%2C%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=100&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true",  
         user: "kanav1", 
         pass: "Kanav1" 
     },
@@ -35,10 +45,10 @@ const PANELS = [
     }
 ];
 
-// ⚙️ 2. UNIVERSAL PANEL SCRAPER FUNCTION
+// ⚙️ 2. UNIVERSAL + JSON SCRAPER FUNCTION
 async function fetchOtpsFromPanel(panel) {
     try {
-        console.log(`⏳ Scanning ALL tables for: ${panel.name}...`);
+        console.log(`⏳ Attacking: ${panel.name}...`);
         
         const jar = new CookieJar();
         const client = wrapper(axios.create({ jar, timeout: 15000 })); 
@@ -69,81 +79,84 @@ async function fetchOtpsFromPanel(panel) {
             }
         });
 
-        // --- STEP C: Fetch Stats & Scan EVERY Table ---
-        const statsRes = await client.get(panel.statsUrl);
-        const $stats = cheerio.load(statsRes.data);
-
         let otps = [];
-        
-        // 🧠 NAYA LOGIC: Page par maujood har <table> tag ko scan karo
-        $stats('table').each((tableIndex, tableElement) => {
+
+        // --- STEP C: JSON FETCHING (Agar AJAX URL ho toh HTML nahi parhna) ---
+        if (panel.ajaxUrl) {
+            console.log(`🚀 Using Direct API Link for ${panel.name}`);
             
-            // Har table k liye column settings reset karo
-            let colIndexes = { time: 0, number: 2, sender: 3, message: -1 };
-            let isTargetTable = false;
+            // Aaj ki date URL mein daalo
+            const finalAjaxUrl = panel.ajaxUrl.replace(/{TODAY}/g, getTodayDate());
+            
+            const statsRes = await client.get(finalAjaxUrl);
+            const jsonResponse = statsRes.data;
 
-            // 1. Pehle Headers (th) check karo ke message kahan hai
-            $stats(tableElement).find('thead th, tr:first-child td').each((i, el) => {
-                const headerText = $stats(el).text().toLowerCase().trim();
-                if (headerText.includes('date') || headerText.includes('time')) colIndexes.time = i;
-                if (headerText.includes('number') || headerText.includes('client')) colIndexes.number = i;
-                if (headerText.includes('sender')) colIndexes.sender = i;
-                if (headerText.includes('message') || headerText.includes('text')) {
-                    colIndexes.message = i;
-                    isTargetTable = true;
+            // DataTables aam taur par 'aaData' ya 'data' key mein array bhejta hai
+            const records = jsonResponse.aaData || jsonResponse.data || [];
+
+            records.forEach(row => {
+                // Row ek array of strings hota hai
+                if (row && row.length >= 4) {
+                    const time = typeof row[0] === 'string' ? row[0].replace(/<[^>]*>?/gm, '').trim() : row[0];
+                    const number = typeof row[2] === 'string' ? row[2].replace(/<[^>]*>?/gm, '').trim() : row[2];
+                    const sender = typeof row[3] === 'string' ? row[3].replace(/<[^>]*>?/gm, '').trim() : row[3];
+                    
+                    // Message aakhri index par hota hai
+                    let message = row[10] || row[row.length - 1];
+                    message = typeof message === 'string' ? message.replace(/<[^>]*>?/gm, '').trim() : message;
+
+                    if (message && message !== '' && !message.toString().includes('0.01')) {
+                        otps.push({ time, sender, number, message });
+                    }
                 }
             });
 
-            // 2. Agar header na mile, lekin table mein 10 se zyada columns hon (X-Ray Logic)
-            const firstDataRow = $stats(tableElement).find('tbody tr').first().find('td');
-            if (firstDataRow.length >= 10) {
-                colIndexes.message = 10; // X-Ray ke mutabiq 11th column
-                isTargetTable = true;
-            } else if (firstDataRow.length >= 4 && !isTargetTable) {
-                // Default fallback
-                colIndexes.message = firstDataRow.length - 1; 
-                isTargetTable = true;
-            }
+        } else {
+            // --- STEP C: HTML FALLBACK (Agar AJAX URL na ho) ---
+            const statsRes = await client.get(panel.statsUrl);
+            const $stats = cheerio.load(statsRes.data);
 
-            // Agar yeh faltu table hai (e.g., layout table), toh aage barho
-            if (!isTargetTable) return;
+            $stats('table').each((tableIndex, tableElement) => {
+                let colIndexes = { time: 0, number: 2, sender: 3, message: -1 };
+                let isTargetTable = false;
 
-            // 3. Ab is specific table ki rows (tr) se data nikalo
-            $stats(tableElement).find('tbody tr').each((rowIndex, rowElement) => {
-                const tds = $stats(rowElement).find('td');
-                
-                // Empty rows ko ignore karo
-                if (tds.length < 3) return; 
+                $stats(tableElement).find('thead th, tr:first-child td').each((i, el) => {
+                    const headerText = $stats(el).text().toLowerCase().trim();
+                    if (headerText.includes('date') || headerText.includes('time')) colIndexes.time = i;
+                    if (headerText.includes('number') || headerText.includes('client')) colIndexes.number = i;
+                    if (headerText.includes('sender')) colIndexes.sender = i;
+                    if (headerText.includes('message') || headerText.includes('text')) {
+                        colIndexes.message = i;
+                        isTargetTable = true;
+                    }
+                });
 
-                const time = colIndexes.time !== -1 && tds.eq(colIndexes.time) ? tds.eq(colIndexes.time).text().trim() : "N/A";
-                const number = colIndexes.number !== -1 && tds.eq(colIndexes.number) ? tds.eq(colIndexes.number).text().trim() : "N/A";
-                const sender = colIndexes.sender !== -1 && tds.eq(colIndexes.sender) ? tds.eq(colIndexes.sender).text().trim() : "N/A";
-                
-                // Message uthao (agar column -1 hai toh last column utha lo)
-                const message = colIndexes.message !== -1 ? tds.eq(colIndexes.message).text().trim() : tds.last().text().trim();
+                const firstDataRow = $stats(tableElement).find('tbody tr').first().find('td');
+                if (firstDataRow.length >= 10) { colIndexes.message = 10; isTargetTable = true; } 
+                else if (firstDataRow.length >= 4 && !isTargetTable) { colIndexes.message = firstDataRow.length - 1; isTargetTable = true; }
 
-                // Sirf woh row save karo jisme waqai koi lambi OTP/Message ho
-                if (message && message !== '' && message.length > 3 && message.toLowerCase() !== 'no data available in table') {
-                    otps.push({ time, sender, number, message });
-                }
+                if (!isTargetTable) return;
+
+                $stats(tableElement).find('tbody tr').each((rowIndex, rowElement) => {
+                    const tds = $stats(rowElement).find('td');
+                    if (tds.length < 3) return; 
+
+                    const time = colIndexes.time !== -1 ? tds.eq(colIndexes.time).text().trim() : "N/A";
+                    const number = colIndexes.number !== -1 ? tds.eq(colIndexes.number).text().trim() : "N/A";
+                    const sender = colIndexes.sender !== -1 ? tds.eq(colIndexes.sender).text().trim() : "N/A";
+                    const message = colIndexes.message !== -1 ? tds.eq(colIndexes.message).text().trim() : tds.last().text().trim();
+
+                    if (message && message.length > 3 && !message.toLowerCase().includes('no data')) {
+                        otps.push({ time, sender, number, message });
+                    }
+                });
             });
-        });
+        }
         
-        return {
-            panel_name: panel.name,
-            status: true,
-            total: otps.length,
-            data: otps
-        };
+        return { panel_name: panel.name, status: true, total: otps.length, data: otps };
 
     } catch (error) {
-        return {
-            panel_name: panel.name,
-            status: false,
-            message: "Failed to fetch",
-            error: error.message,
-            data: []
-        };
+        return { panel_name: panel.name, status: false, message: "Fetch Error", error: error.message, data: [] };
     }
 }
 
@@ -173,15 +186,10 @@ app.get('/api/get-all-otps', async (req, res) => {
         });
 
     } catch (error) {
-        return res.status(500).json({
-            status: false,
-            message: "Master API Error",
-            error: error.message
-        });
+        return res.status(500).json({ status: false, message: "Master API Error", error: error.message });
     }
 });
 
-// Root route
-app.get('/', (req, res) => res.send('<h2>💎 Shahzaib Tech Universal API is LIVE</h2><p>Go to <a href="/api/get-all-otps">/api/get-all-otps</a></p>'));
+app.get('/', (req, res) => res.send('<h2>💎 Shahzaib Tech API is LIVE</h2><p>Go to <a href="/api/get-all-otps">/api/get-all-otps</a></p>'));
 
 module.exports = app;
