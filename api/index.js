@@ -14,7 +14,7 @@ const PANEL = {
     pass: "Kanav1"  // ⚠️ Password yahan dalein
 };
 
-app.get('/api/gaza', async (req, res) => {
+app.get('/api/get-all-otps', async (req, res) => {
     try {
         const jar = new CookieJar();
         const client = wrapper(axios.create({ jar, timeout: 20000 }));
