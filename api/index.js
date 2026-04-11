@@ -10,61 +10,54 @@ const app = express();
 const PANEL = {
     loginUrl: "http://144.217.71.192/ints/login",
     statsUrl: "http://144.217.71.192/ints/agent/SMSClientStats",
-    user: "Kanav1", // ⚠️ Username yahan dalein
-    pass: "Kanav1"  // ⚠️ Password yahan dalein
+    user: "Kanav1", // ⚠️ Yahan Username daalein
+    pass: "Kanav1"  // ⚠️ Yahan Password daalein
 };
 
+// 👉 Yeh hai aapka endpoint jo 404 de raha tha
 app.get('/api/get-all-otps', async (req, res) => {
     try {
         const jar = new CookieJar();
         const client = wrapper(axios.create({ jar, timeout: 20000 }));
 
-        // 1. Get Login Page for Captcha
-        const loginPageRes = await client.get(PANEL.loginUrl);
-        const $ = cheerio.load(loginPageRes.data);
-        
-        let captchaText = $('label:contains("=")').text() || $('div:contains("=")').text(); 
-        let captchaAnswer = 0;
-        
+        // 1. Solve Math Captcha (X + Y =)
+        const loginPage = await client.get(PANEL.loginUrl);
+        const $ = cheerio.load(loginPage.data);
+        const captchaText = $('label:contains("=")').text() || $('div:contains("=")').text();
+        let ans = 0;
         if (captchaText) {
-            const numbers = captchaText.match(/\d+/g); 
-            if (numbers && numbers.length >= 2) {
-                captchaAnswer = parseInt(numbers[0]) + parseInt(numbers[1]);
-            }
+            const nums = captchaText.match(/\d+/g);
+            if (nums && nums.length >= 2) ans = parseInt(nums[0]) + parseInt(nums[1]);
         }
-        
-        const csrfToken = $('input[name="csrf_token"]').val() || '';
 
-        // 2. Login
+        // 2. Login Process
         const loginData = new URLSearchParams();
         loginData.append('username', PANEL.user);
         loginData.append('password', PANEL.pass);
-        loginData.append('capt', captchaAnswer); 
-        if (csrfToken) loginData.append('csrf_token', csrfToken); 
-
+        loginData.append('capt', ans);
         await client.post(PANEL.loginUrl, loginData, {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         });
 
-        // 3. Fetch Data
+        // 3. Fetch Data from Stats Table
         const statsRes = await client.get(PANEL.statsUrl);
         const $stats = cheerio.load(statsRes.data);
-        let results = [];
+        let otps = [];
 
         $stats('table tbody tr').each((i, row) => {
             const tds = $(row).find('td');
             if (tds.length >= 2 && !$(row).text().includes('No data')) {
-                results.push({
+                otps.push({
                     client: $(tds[0]).text().trim(),
-                    sms: $(tds[1]).text().trim()
+                    sms_content: $(tds[1]).text().trim()
                 });
             }
         });
 
-        res.json({ status: true, creator: "Shahzaib Tech", total: results.length, data: results });
+        res.json({ status: true, total: otps.length, data: otps });
 
-    } catch (error) {
-        res.status(500).json({ status: false, error: error.message });
+    } catch (e) {
+        res.status(500).json({ status: false, error: e.message });
     }
 });
 
