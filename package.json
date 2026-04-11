@@ -1,4 +1,6 @@
 {
+  "name": "gaza-iprn-api",
+  "version": "1.0.0",
   "dependencies": {
     "axios": "^1.6.0",
     "axios-cookiejar-support": "^4.0.3",
