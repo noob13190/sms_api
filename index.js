@@ -135,10 +135,15 @@ app.get('/', (req, res) => res.send('<h2>💎 GAZA IPRN API is LIVE</h2><p>Go to
 // --- VERCEL REQUIRED EXPORT ---
 module.exports = app;
 
-// Local testing ke liye (Sirf tab chalega jab locally run ho)
-if (require.main === module) {
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-        console.log(`🚀 API is LIVE on port ${PORT}`);
-    });
-}
+// Is purane hissay ko hata dein:
+// const http = require('http');
+// http.createServer((req, res) => { ... }).listen(...);
+
+// 👇 Aur iski jagah YEH NAYA CODE laga dein 👇
+
+// --- VERCEL REQUIRED DUMMY SERVER ---
+module.exports = (req, res) => {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<h2>💎 Shahzaib Tech Bot is 100% LIVE & RUNNING!</h2>');
+};
