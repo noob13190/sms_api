@@ -1,18 +1,9 @@
 {
-  "name": "global-otp-hub",
-  "version": "1.0.0",
-  "description": "Shahzaib Tech VIP OTP Bot",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
-    "axios": "^1.6.8",
-    "telegraf": "^4.16.3"
-  },
-  "engines": {
-    "node": "18.x"
-  },
-  "author": "Shahzaib Tech",
-  "license": "ISC"
+    "axios": "^1.6.0",
+    "axios-cookiejar-support": "^4.0.3",
+    "cheerio": "^1.0.0-rc.12",
+    "express": "^4.18.2",
+    "tough-cookie": "^4.1.3"
+  }
 }
