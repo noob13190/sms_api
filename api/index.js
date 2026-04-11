@@ -7,7 +7,7 @@ const { CookieJar } = require('tough-cookie');
 const app = express();
 app.use(express.json());
 
-// 🛑 1. PANELS KI DETAILS (Aapke naye URLs aur Passwords k sath)
+// 🛑 1. PANELS KI DETAILS
 const PANELS = [
     { 
         id: 1, 
@@ -35,10 +35,10 @@ const PANELS = [
     }
 ];
 
-// ⚙️ 2. SINGLE PANEL SCRAPER FUNCTION
+// ⚙️ 2. UNIVERSAL PANEL SCRAPER FUNCTION
 async function fetchOtpsFromPanel(panel) {
     try {
-        console.log(`⏳ Starting extraction for: ${panel.name}...`);
+        console.log(`⏳ Scanning ALL tables for: ${panel.name}...`);
         
         const jar = new CookieJar();
         const client = wrapper(axios.create({ jar, timeout: 15000 })); 
@@ -69,27 +69,64 @@ async function fetchOtpsFromPanel(panel) {
             }
         });
 
-        // --- STEP C: Fetch Stats & Scrape OTPs (CORRECTED LOGIC) ---
+        // --- STEP C: Fetch Stats & Scan EVERY Table ---
         const statsRes = await client.get(panel.statsUrl);
         const $stats = cheerio.load(statsRes.data);
 
         let otps = [];
         
-        $stats('table tbody tr').each((index, element) => {
-            const tds = $stats(element).find('td');
+        // 🧠 NAYA LOGIC: Page par maujood har <table> tag ko scan karo
+        $stats('table').each((tableIndex, tableElement) => {
             
-            // Agar table khali ho toh aage na barho
-            if (tds.length < 5) return; 
+            // Har table k liye column settings reset karo
+            let colIndexes = { time: 0, number: 2, sender: 3, message: -1 };
+            let isTargetTable = false;
 
-            // Aapke DataTables k hisaab se exact columns:
-            const time = tds.eq(0).text().trim();       // Column 1: Date/Time
-            const number = tds.eq(2).text().trim();     // Column 3: Number
-            const sender = tds.eq(3).text().trim();     // Column 4: SenderID
-            const message = tds.last().text().trim();   // Aakhri Column: Message
+            // 1. Pehle Headers (th) check karo ke message kahan hai
+            $stats(tableElement).find('thead th, tr:first-child td').each((i, el) => {
+                const headerText = $stats(el).text().toLowerCase().trim();
+                if (headerText.includes('date') || headerText.includes('time')) colIndexes.time = i;
+                if (headerText.includes('number') || headerText.includes('client')) colIndexes.number = i;
+                if (headerText.includes('sender')) colIndexes.sender = i;
+                if (headerText.includes('message') || headerText.includes('text')) {
+                    colIndexes.message = i;
+                    isTargetTable = true;
+                }
+            });
 
-            if (message && message !== '') {
-                otps.push({ time, sender, number, message });
+            // 2. Agar header na mile, lekin table mein 10 se zyada columns hon (X-Ray Logic)
+            const firstDataRow = $stats(tableElement).find('tbody tr').first().find('td');
+            if (firstDataRow.length >= 10) {
+                colIndexes.message = 10; // X-Ray ke mutabiq 11th column
+                isTargetTable = true;
+            } else if (firstDataRow.length >= 4 && !isTargetTable) {
+                // Default fallback
+                colIndexes.message = firstDataRow.length - 1; 
+                isTargetTable = true;
             }
+
+            // Agar yeh faltu table hai (e.g., layout table), toh aage barho
+            if (!isTargetTable) return;
+
+            // 3. Ab is specific table ki rows (tr) se data nikalo
+            $stats(tableElement).find('tbody tr').each((rowIndex, rowElement) => {
+                const tds = $stats(rowElement).find('td');
+                
+                // Empty rows ko ignore karo
+                if (tds.length < 3) return; 
+
+                const time = colIndexes.time !== -1 && tds.eq(colIndexes.time) ? tds.eq(colIndexes.time).text().trim() : "N/A";
+                const number = colIndexes.number !== -1 && tds.eq(colIndexes.number) ? tds.eq(colIndexes.number).text().trim() : "N/A";
+                const sender = colIndexes.sender !== -1 && tds.eq(colIndexes.sender) ? tds.eq(colIndexes.sender).text().trim() : "N/A";
+                
+                // Message uthao (agar column -1 hai toh last column utha lo)
+                const message = colIndexes.message !== -1 ? tds.eq(colIndexes.message).text().trim() : tds.last().text().trim();
+
+                // Sirf woh row save karo jisme waqai koi lambi OTP/Message ho
+                if (message && message !== '' && message.length > 3 && message.toLowerCase() !== 'no data available in table') {
+                    otps.push({ time, sender, number, message });
+                }
+            });
         });
         
         return {
@@ -144,7 +181,7 @@ app.get('/api/get-all-otps', async (req, res) => {
     }
 });
 
-// Root route for friendly message
-app.get('/', (req, res) => res.send('<h2>💎 Shahzaib Tech API is LIVE</h2><p>Go to <a href="/api/get-all-otps">/api/get-all-otps</a></p>'));
+// Root route
+app.get('/', (req, res) => res.send('<h2>💎 Shahzaib Tech Universal API is LIVE</h2><p>Go to <a href="/api/get-all-otps">/api/get-all-otps</a></p>'));
 
 module.exports = app;
