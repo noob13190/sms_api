@@ -8,8 +8,8 @@ const app = express();
 
 // --- 🛑 PANEL CREDENTIALS ---
 const PANEL = {
-    loginUrl: "http://144.217.71.192/ints/login",
-    statsUrl: "http://144.217.71.192/ints/agent/SMSClientStats",
+    loginUrl: "http://185.2.83.39/ints/login",
+    statsUrl: "http://185.2.83.39/ints/agent/SMSNumberStats",
     user: "Kanav1", // ⚠️ Yahan Username daalein
     pass: "Kanav1"  // ⚠️ Yahan Password daalein
 };
