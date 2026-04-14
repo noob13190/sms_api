@@ -1,14 +1,8 @@
 const express = require('express');
 const axios = require('axios');
-const cheerio = require('cheerio');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// --- 🛑 PANEL CREDENTIALS & COOKIE ---
-const PANEL = {
-    statsUrl: "http://185.2.83.39/ints/agent/SMSCDRStats"
-};
 
 // 💎 AAPKI ZINDA COOKIE YAHAN HAI
 const MY_COOKIE = "PHPSESSID=5fo5g7gqc6trsr2mv1fciig1pn";
@@ -35,82 +29,70 @@ function extractOTP(text) {
     return "Code";
 }
 
+// DataTables kabhi kabhi text HTML tags (jaise <span>) ke andar bhejta hai, yeh usko saaf karega
+function stripHtml(html) {
+    if (!html) return "";
+    return html.toString().replace(/<[^>]*>?/gm, '').trim();
+}
+
 app.get('/api/get-all-otps', async (req, res) => {
     try {
-        // 1. Direct Request with Cookie
-        const statsRes = await axios.get(PANEL.statsUrl, {
+        // 🔄 AUTO-DATE GENERATOR (Taake kal bhi naya data aaye)
+        const d = new Date();
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const today = `${yyyy}-${mm}-${dd}`; // Result: 2026-04-14
+        
+        // 🔗 THE ULTIMATE HIDDEN AJAX LINK (Auto-Updating Date)
+        // Note: iDisplayLength=100 kar diya hai taake ek baari mein 100 SMS pakar le
+        const hiddenApiUrl = `http://185.2.83.39/ints/agent/res/data_smscdr.php?fdate1=${today}%2000:00:00&fdate2=${today}%2023:59:59&fg=0&sesskey=Q05RR0FSUEVCVw==&sEcho=1&iColumns=9&iDisplayStart=0&iDisplayLength=100&sSortDir_0=desc`;
+
+        // 🔥 DIRECT HIT TO PANEL SERVER
+        const response = await axios.get(hiddenApiUrl, {
             headers: {
                 'Cookie': MY_COOKIE,
-                // Asli browser banne ki koshish
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'X-Requested-With': 'XMLHttpRequest' // Panel ko lagega page ne request bheji hai
             },
             timeout: 10000
         });
 
-        const $stats = cheerio.load(statsRes.data);
+        // DataTables apni array ko 'aaData' ya 'data' ke andar bhejta hai
+        const rows = response.data.aaData || response.data.data || [];
         
-        // 🚨 DEEP DEBUGGING TOOLS 🚨
-        const pageTitle = $stats('title').text().trim();
-        const tablesFound = $stats('table').length;
-        const rowsFound = $stats('table tbody tr').length;
-        let firstRowPreview = "No Rows Found";
-        
-        if (rowsFound > 0) {
-            // Pehli row ka kachra text saaf kar ke dekhne ke liye
-            firstRowPreview = $stats('table tbody tr').first().text().replace(/\s+/g, ' ').trim();
+        if (rows.length === 0) {
+            return res.json({ status: true, total: 0, debug_info: "AJAX API properly hit hui, par aaj koi SMS nahi hai.", data: [] });
         }
 
-        // Agar Login page par redirect ho gaya hai
-        if (pageTitle.toLowerCase().includes("login")) {
-            return res.json({ 
-                status: false, 
-                error: "Cookie Reject ho gayi! Panel ne wapis Login par phenk diya.",
-                debug_info: { page_title: pageTitle }
-            });
-        }
-
-        // 2. 🚀 DATA EXTRACTION (X-Ray Indexes)
         let otps = [];
-        $stats('table tbody tr').each((i, row) => {
-            const tds = $stats(row).find('td');
+        
+        // JSON array loop (HTML ka chakar khatam)
+        rows.forEach(row => {
+            // X-Ray Match: row[2] = Number, row[3] = CLI, row[5] = SMS
+            let number = stripHtml(row[2]);
+            let cli = stripHtml(row[3]);
+            let fullSms = stripHtml(row[5]);
             
-            // Cheerio mein index use karne ke liye .eq() function best rehta hai
-            if (tds.length >= 6 && !$stats(row).text().includes('No data')) {
-                let number = tds.eq(2).text().trim();      // Column 3 = Number
-                let cli = tds.eq(3).text().trim();         // Column 4 = CLI
-                let fullSms = tds.eq(5).attr('title') || tds.eq(5).text().trim(); // Column 6 = SMS
-                
-                let extractedOtp = extractOTP(fullSms);
-                let appName = detectApp(fullSms, cli);
+            let extractedOtp = extractOTP(fullSms);
+            let appName = detectApp(fullSms, cli);
 
-                if(number && fullSms) {
-                    otps.push({ number, app: appName, otp: extractedOtp, sms_content: fullSms });
-                }
+            if(number && fullSms) {
+                otps.push({ number, app: appName, otp: extractedOtp, sms_content: fullSms });
             }
         });
 
-        // 🎯 FINAL RESPONSE (With Debug Info)
-        res.json({ 
-            status: true, 
-            total: otps.length, 
-            debug_info: {
-                page_title: pageTitle,
-                tables_found: tablesFound,
-                rows_found: rowsFound,
-                first_row_preview: firstRowPreview
-            },
-            data: otps 
-        });
+        res.json({ status: true, total: otps.length, data: otps });
 
     } catch (e) {
         res.status(500).json({ status: false, error: e.message });
     }
 });
 
-// Dunya mein kahin se bhi access ke liye 0.0.0.0
+// Port 0.0.0.0 takay pori dunya se access ho
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🔥 Fast Cookie API Live on port ${PORT}`);
+    console.log(`🔥 ULTIMATE LIGHTNING API Live on port ${PORT}`);
 });
 
 module.exports = app;
