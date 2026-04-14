@@ -9,21 +9,21 @@ const app = express();
 // --- 🛑 PANEL CREDENTIALS ---
 const PANEL = {
     loginUrl: "http://185.2.83.39/ints/login",
-    statsUrl: "http://185.2.83.39/ints/agent/SMSNumberStats",
+    statsUrl: "http://185.2.83.39/ints/agent/SMSCDRStats", // 👈 Naya URL yahan laga diya hai
     user: "Kanav1", // ⚠️ Yahan Username daalein
     pass: "Kanav1"  // ⚠️ Yahan Password daalein
 };
 
 // --- 🔍 SMART APP DETECTOR ---
-function detectApp(smsText) {
-    let s = smsText.toLowerCase();
-    if (s.includes('whatsapp') || s.includes('wa')) return 'WhatsApp';
-    if (s.includes('telegram') || s.includes('tg')) return 'Telegram';
-    if (s.includes('facebook') || s.includes('fb')) return 'Facebook';
-    if (s.includes('google')) return 'Google';
-    if (s.includes('tiktok')) return 'TikTok';
-    if (s.includes('instagram') || s.includes('ig')) return 'Instagram';
-    return 'System'; // Agar koi match na ho
+function detectApp(smsText, cliText) {
+    let text = (smsText + " " + cliText).toLowerCase();
+    if (text.includes('whatsapp') || text.includes('wa')) return 'WhatsApp';
+    if (text.includes('telegram') || text.includes('tg')) return 'Telegram';
+    if (text.includes('facebook') || text.includes('fb')) return 'Facebook';
+    if (text.includes('google')) return 'Google';
+    if (text.includes('tiktok')) return 'TikTok';
+    if (text.includes('instagram') || text.includes('ig')) return 'Instagram';
+    return cliText || 'System'; // Agar message mein naam na ho toh CLI utha lega
 }
 
 app.get('/api/get-all-otps', async (req, res) => {
@@ -31,7 +31,7 @@ app.get('/api/get-all-otps', async (req, res) => {
         const jar = new CookieJar();
         const client = wrapper(axios.create({ jar, timeout: 20000 }));
 
-        // 1. Solve Math Captcha (X + Y =)
+        // 1. Solve Math Captcha (X + Y =) Auto-Pilot 🚀
         const loginPage = await client.get(PANEL.loginUrl);
         const $ = cheerio.load(loginPage.data);
         const captchaText = $('label:contains("=")').text() || $('div:contains("=")').text();
@@ -41,7 +41,7 @@ app.get('/api/get-all-otps', async (req, res) => {
             if (nums && nums.length >= 2) ans = parseInt(nums[0]) + parseInt(nums[1]);
         }
 
-        // 2. Login Process
+        // 2. Auto Login Process
         const loginData = new URLSearchParams();
         loginData.append('username', PANEL.user);
         loginData.append('password', PANEL.pass);
@@ -50,32 +50,39 @@ app.get('/api/get-all-otps', async (req, res) => {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         });
 
-        // 3. Fetch Data from Stats Table
+        // 3. Fetch Data from New CDR Stats Table
         const statsRes = await client.get(PANEL.statsUrl);
         const $stats = cheerio.load(statsRes.data);
         let otps = [];
 
+        // Table ki rows parhna shuru karega
         $stats('table tbody tr').each((i, row) => {
             const tds = $stats(row).find('td');
             
-            // Ensure kam az kam 2 columns hain aur "No data" nahi likha
-            if (tds.length >= 2 && !$stats(row).text().includes('No data')) {
-                let number = $stats(tds[0]).text().trim();
-                let fullSms = $stats(tds[1]).text().trim();
+            // CDR table mein kam az kam 6 columns zaroori hain SMS tak pohnchne k liye
+            if (tds.length >= 6 && !$stats(row).text().includes('No data')) {
                 
-                // Aggressive OTP Extractor (4 se 8 digits nikalega)
-                let looseMatch = fullSms.match(/\d{4,8}/);
-                let extractedOtp = looseMatch ? looseMatch[0] : "Code";
+                // 🎯 Columns targeting based on your format: Date | Range | Number | CLI | Client | SMS
+                let number = $stats(tds[2]).text().trim();      // Column 3 = Number
+                let cli = $stats(tds[3]).text().trim();         // Column 4 = CLI (App Name)
+                let fullSms = $stats(tds[5]).text().trim();     // Column 6 = Message Content
+                
+                // OTP Extractor
+                let waMatch = fullSms.match(/(\d{3})[-\s](\d{3})/); // WhatsApp k liye (123-456)
+                let looseMatch = fullSms.match(/\b\d{4,8}\b/);      // Normal 4 se 8 digit k liye
+                let extractedOtp = waMatch ? (waMatch[1] + waMatch[2]) : (looseMatch ? looseMatch[0] : "Code");
                 
                 // Smart App Name Detector
-                let appName = detectApp(fullSms);
+                let appName = detectApp(fullSms, cli);
 
-                otps.push({
-                    number: number,
-                    app: appName,
-                    otp: extractedOtp,
-                    sms_content: fullSms
-                });
+                if(number && fullSms) {
+                    otps.push({
+                        number: number,
+                        app: appName,
+                        otp: extractedOtp,
+                        sms_content: fullSms
+                    });
+                }
             }
         });
 
