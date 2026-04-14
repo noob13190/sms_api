@@ -32,14 +32,15 @@ app.get('/api/get-all-otps', async (req, res) => {
         const client = wrapper(axios.create({ 
             jar, 
             timeout: 20000,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36' }
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+            maxRedirects: 5 // Redirects ko auto-follow karega
         }));
 
-        // 1. Pehle Login Page Kholo
+        // 1. Kholo Login Page (Taa ke Server Cookie de de)
         const loginPage = await client.get(PANEL.loginUrl);
         const $ = cheerio.load(loginPage.data);
         
-        // 2. Math Captcha ko Aggressively Pakro (e.g. "What is 6 + 3 = ?")
+        // 2. Math Captcha Logic
         const bodyText = $('body').text().replace(/\s+/g, ' ');
         const mathMatch = bodyText.match(/(\d+)\s*\+\s*(\d+)/);
         let ans = 0;
@@ -47,64 +48,42 @@ app.get('/api/get-all-otps', async (req, res) => {
             ans = parseInt(mathMatch[1]) + parseInt(mathMatch[2]);
         }
 
-        // 3. 🔥 SMART FORM READER (Hidden Tokens & Dynamic Field Names)
+        // 3. Prepare Login Data
         let loginData = new URLSearchParams();
-        let debugFormInputs = []; // Debugging ke liye
+        loginData.append('username', PANEL.user);
+        loginData.append('password', PANEL.pass);
+        loginData.append('capt', ans.toString());
 
-        $('form input').each((i, el) => {
-            let name = $(el).attr('name');
-            let type = $(el).attr('type') || 'text';
-            let val = $(el).attr('value') || '';
-            
-            if (name) {
-                debugFormInputs.push({ name, type, value: val });
-                
-                // Agar hidden security field hai, toh wesi hi bhej do
-                if (type === 'hidden') {
-                    loginData.append(name, val); 
-                } 
-                // Agar Password field hai
-                else if (type === 'password' || name.toLowerCase().includes('pass')) {
-                    loginData.append(name, PANEL.pass);
-                } 
-                // Agar Username/Email field hai
-                else if (name.toLowerCase().includes('user') || name.toLowerCase().includes('email')) {
-                    loginData.append(name, PANEL.user);
-                } 
-                // Agar Captcha field hai
-                else if (name.toLowerCase().includes('capt') || name.toLowerCase().includes('ans') || type === 'number') {
-                    loginData.append(name, ans);
-                }
-            }
-        });
-
-        // 4. Submit Auto-Filled Form
-        await client.post(PANEL.loginUrl, loginData, {
+        // 4. 🔥 VIP FIX: Asli Browser Headers (Server Firewall Bypass)
+        await client.post(PANEL.loginUrl, loginData.toString(), {
             headers: { 
-                'Content-Type': 'application/x-www-form-urlencoded', 
-                'Referer': PANEL.loginUrl 
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Origin': 'http://185.2.83.39',
+                'Referer': 'http://185.2.83.39/ints/login',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
             }
         });
 
-        // 5. Check CDR Stats Page (Kamiyabi mili ya nahi?)
-        const statsRes = await client.get(PANEL.statsUrl);
+        // 5. Form bhejne ke baad CDR page par jao
+        const statsRes = await client.get(PANEL.statsUrl, {
+            headers: {
+                'Referer': 'http://185.2.83.39/ints/agent/dashboard' // Server ko lagay dashboard se click karke aaya hai
+            }
+        });
+        
         const $stats = cheerio.load(statsRes.data);
         const pageTitle = $stats('title').text().trim();
 
-        // 🚨 AGAR LOGIN FAIL HUA TOH POORI REPORT DO
         if (pageTitle.toLowerCase().includes("login")) {
             return res.json({ 
                 status: false, 
-                error: "Form submit kiya par wapis Login par bhej diya. Debug data dekhein:", 
-                debug_info: {
-                    math_found: mathMatch ? `${mathMatch[1]} + ${mathMatch[2]} = ${ans}` : "Math nahi mila",
-                    panel_required_fields: debugFormInputs,
-                    data_we_sent: loginData.toString()
-                }
+                error: "Headers bypass bhi fail ho gaya. Panel strictly IP check kar raha hai ya cookies drop kar raha hai."
             });
         }
 
-        // 6. 🚀 DATA EXTRACTION (Jab Login Successful ho jaye)
+        // 6. 🚀 DATA EXTRACTION
         let otps = [];
         $stats('table tbody tr').each((i, row) => {
             const tds = $stats(row).find('td');
@@ -116,7 +95,6 @@ app.get('/api/get-all-otps', async (req, res) => {
                 let waMatch = fullSms.match(/(\d{3})[-\s](\d{3})/); 
                 let looseMatch = fullSms.match(/\b\d{4,8}\b/);      
                 let extractedOtp = waMatch ? (waMatch[1] + waMatch[2]) : (looseMatch ? looseMatch[0] : "Code");
-                
                 let appName = detectApp(fullSms, cli);
 
                 if(number && fullSms) {
