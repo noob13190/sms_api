@@ -1,18 +1,17 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { wrapper } = require('axios-cookiejar-support');
-const { CookieJar } = require('tough-cookie');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// --- 🛑 PANEL CREDENTIALS ---
+// --- 🛑 PANEL CREDENTIALS & COOKIE ---
 const PANEL = {
-    loginUrl: "http://185.2.83.39/ints/login",
-    statsUrl: "http://185.2.83.39/ints/agent/SMSCDRStats",
-    user: "Kanav1",
-    pass: "Kanav1"
+    statsUrl: "http://185.2.83.39/ints/agent/SMSCDRStats"
 };
+
+// 💎 AAPKI ZINDA COOKIE YAHAN HAI
+const MY_COOKIE = "PHPSESSID=5fo5g7gqc6trsr2mv1fciig1pn";
 
 // --- 🔍 SMART APP DETECTOR ---
 function detectApp(smsText, cliText) {
@@ -26,75 +25,50 @@ function detectApp(smsText, cliText) {
     return cliText || 'System'; 
 }
 
+// --- 🔑 OTP EXTRACTOR ---
+function extractOTP(text) {
+    if (!text) return "Code";
+    let waMatch = text.match(/(\d{3})[-\s](\d{3})/);
+    if (waMatch) return waMatch[1] + waMatch[2];
+    let looseMatch = text.match(/\b\d{4,8}\b/);
+    if (looseMatch) return looseMatch[0];
+    return "Code";
+}
+
 app.get('/api/get-all-otps', async (req, res) => {
     try {
-        const jar = new CookieJar();
-        const client = wrapper(axios.create({ 
-            jar, 
-            timeout: 20000,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-            maxRedirects: 5 // Redirects ko auto-follow karega
-        }));
-
-        // 1. Kholo Login Page (Taa ke Server Cookie de de)
-        const loginPage = await client.get(PANEL.loginUrl);
-        const $ = cheerio.load(loginPage.data);
-        
-        // 2. Math Captcha Logic
-        const bodyText = $('body').text().replace(/\s+/g, ' ');
-        const mathMatch = bodyText.match(/(\d+)\s*\+\s*(\d+)/);
-        let ans = 0;
-        if (mathMatch) {
-            ans = parseInt(mathMatch[1]) + parseInt(mathMatch[2]);
-        }
-
-        // 3. Prepare Login Data
-        let loginData = new URLSearchParams();
-        loginData.append('username', PANEL.user);
-        loginData.append('password', PANEL.pass);
-        loginData.append('capt', ans.toString());
-
-        // 4. 🔥 VIP FIX: Asli Browser Headers (Server Firewall Bypass)
-        await client.post(PANEL.loginUrl, loginData.toString(), {
-            headers: { 
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Origin': 'http://185.2.83.39',
-                'Referer': 'http://185.2.83.39/ints/login',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            }
-        });
-
-        // 5. Form bhejne ke baad CDR page par jao
-        const statsRes = await client.get(PANEL.statsUrl, {
+        // 1. Direct Request with Cookie
+        const statsRes = await axios.get(PANEL.statsUrl, {
             headers: {
-                'Referer': 'http://185.2.83.39/ints/agent/dashboard' // Server ko lagay dashboard se click karke aaya hai
-            }
+                'Cookie': MY_COOKIE,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+            },
+            timeout: 10000
         });
-        
+
         const $stats = cheerio.load(statsRes.data);
         const pageTitle = $stats('title').text().trim();
 
+        // 🚨 COOKIE CHECK
         if (pageTitle.toLowerCase().includes("login")) {
             return res.json({ 
                 status: false, 
-                error: "Headers bypass bhi fail ho gaya. Panel strictly IP check kar raha hai ya cookies drop kar raha hai."
+                error: "Cookie Expired ya IP Lock ho gayi! Nayi cookie update karein.",
+                current_page: pageTitle
             });
         }
 
-        // 6. 🚀 DATA EXTRACTION
+        // 2. 🚀 DATA EXTRACTION (X-Ray Indexes)
         let otps = [];
         $stats('table tbody tr').each((i, row) => {
             const tds = $stats(row).find('td');
+            
             if (tds.length >= 6 && !$stats(row).text().includes('No data')) {
-                let number = $stats(tds[2]).text().trim();      
-                let cli = $stats(tds[3]).text().trim();         
-                let fullSms = $stats(tds[5]).text().trim() || $stats(tds[4]).text().trim();
+                let number = $stats(tds[2]).text().trim();      // Column 3 = Number
+                let cli = $stats(tds[3]).text().trim();         // Column 4 = CLI
+                let fullSms = $stats(tds[5]).attr('title') || $stats(tds[5]).text().trim(); // Column 6 = SMS
                 
-                let waMatch = fullSms.match(/(\d{3})[-\s](\d{3})/); 
-                let looseMatch = fullSms.match(/\b\d{4,8}\b/);      
-                let extractedOtp = waMatch ? (waMatch[1] + waMatch[2]) : (looseMatch ? looseMatch[0] : "Code");
+                let extractedOtp = extractOTP(fullSms);
                 let appName = detectApp(fullSms, cli);
 
                 if(number && fullSms) {
@@ -108,6 +82,11 @@ app.get('/api/get-all-otps', async (req, res) => {
     } catch (e) {
         res.status(500).json({ status: false, error: e.message });
     }
+});
+
+// Dunya mein kahin se bhi access ke liye 0.0.0.0
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🔥 Fast Cookie API Live on port ${PORT}`);
 });
 
 module.exports = app;
