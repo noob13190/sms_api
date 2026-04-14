@@ -41,20 +41,32 @@ app.get('/api/get-all-otps', async (req, res) => {
         const statsRes = await axios.get(PANEL.statsUrl, {
             headers: {
                 'Cookie': MY_COOKIE,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+                // Asli browser banne ki koshish
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
             },
             timeout: 10000
         });
 
         const $stats = cheerio.load(statsRes.data);
+        
+        // 🚨 DEEP DEBUGGING TOOLS 🚨
         const pageTitle = $stats('title').text().trim();
+        const tablesFound = $stats('table').length;
+        const rowsFound = $stats('table tbody tr').length;
+        let firstRowPreview = "No Rows Found";
+        
+        if (rowsFound > 0) {
+            // Pehli row ka kachra text saaf kar ke dekhne ke liye
+            firstRowPreview = $stats('table tbody tr').first().text().replace(/\s+/g, ' ').trim();
+        }
 
-        // 🚨 COOKIE CHECK
+        // Agar Login page par redirect ho gaya hai
         if (pageTitle.toLowerCase().includes("login")) {
             return res.json({ 
                 status: false, 
-                error: "Cookie Expired ya IP Lock ho gayi! Nayi cookie update karein.",
-                current_page: pageTitle
+                error: "Cookie Reject ho gayi! Panel ne wapis Login par phenk diya.",
+                debug_info: { page_title: pageTitle }
             });
         }
 
@@ -63,10 +75,11 @@ app.get('/api/get-all-otps', async (req, res) => {
         $stats('table tbody tr').each((i, row) => {
             const tds = $stats(row).find('td');
             
+            // Cheerio mein index use karne ke liye .eq() function best rehta hai
             if (tds.length >= 6 && !$stats(row).text().includes('No data')) {
-                let number = $stats(tds[2]).text().trim();      // Column 3 = Number
-                let cli = $stats(tds[3]).text().trim();         // Column 4 = CLI
-                let fullSms = $stats(tds[5]).attr('title') || $stats(tds[5]).text().trim(); // Column 6 = SMS
+                let number = tds.eq(2).text().trim();      // Column 3 = Number
+                let cli = tds.eq(3).text().trim();         // Column 4 = CLI
+                let fullSms = tds.eq(5).attr('title') || tds.eq(5).text().trim(); // Column 6 = SMS
                 
                 let extractedOtp = extractOTP(fullSms);
                 let appName = detectApp(fullSms, cli);
@@ -77,7 +90,18 @@ app.get('/api/get-all-otps', async (req, res) => {
             }
         });
 
-        res.json({ status: true, total: otps.length, data: otps });
+        // 🎯 FINAL RESPONSE (With Debug Info)
+        res.json({ 
+            status: true, 
+            total: otps.length, 
+            debug_info: {
+                page_title: pageTitle,
+                tables_found: tablesFound,
+                rows_found: rowsFound,
+                first_row_preview: firstRowPreview
+            },
+            data: otps 
+        });
 
     } catch (e) {
         res.status(500).json({ status: false, error: e.message });
