@@ -14,7 +14,18 @@ const PANEL = {
     pass: "Kanav1"  // ⚠️ Yahan Password daalein
 };
 
-// 👉 Yeh hai aapka endpoint jo 404 de raha tha
+// --- 🔍 SMART APP DETECTOR ---
+function detectApp(smsText) {
+    let s = smsText.toLowerCase();
+    if (s.includes('whatsapp') || s.includes('wa')) return 'WhatsApp';
+    if (s.includes('telegram') || s.includes('tg')) return 'Telegram';
+    if (s.includes('facebook') || s.includes('fb')) return 'Facebook';
+    if (s.includes('google')) return 'Google';
+    if (s.includes('tiktok')) return 'TikTok';
+    if (s.includes('instagram') || s.includes('ig')) return 'Instagram';
+    return 'System'; // Agar koi match na ho
+}
+
 app.get('/api/get-all-otps', async (req, res) => {
     try {
         const jar = new CookieJar();
@@ -45,11 +56,25 @@ app.get('/api/get-all-otps', async (req, res) => {
         let otps = [];
 
         $stats('table tbody tr').each((i, row) => {
-            const tds = $(row).find('td');
-            if (tds.length >= 2 && !$(row).text().includes('No data')) {
+            const tds = $stats(row).find('td');
+            
+            // Ensure kam az kam 2 columns hain aur "No data" nahi likha
+            if (tds.length >= 2 && !$stats(row).text().includes('No data')) {
+                let number = $stats(tds[0]).text().trim();
+                let fullSms = $stats(tds[1]).text().trim();
+                
+                // Aggressive OTP Extractor (4 se 8 digits nikalega)
+                let looseMatch = fullSms.match(/\d{4,8}/);
+                let extractedOtp = looseMatch ? looseMatch[0] : "Code";
+                
+                // Smart App Name Detector
+                let appName = detectApp(fullSms);
+
                 otps.push({
-                    client: $(tds[0]).text().trim(),
-                    sms_content: $(tds[1]).text().trim()
+                    number: number,
+                    app: appName,
+                    otp: extractedOtp,
+                    sms_content: fullSms
                 });
             }
         });
